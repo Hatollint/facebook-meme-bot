@@ -12,15 +12,33 @@ import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.ext.web.client.WebClientOptions;
+import java.io.File;
+import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
 
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.FilenameUtils;
+import org.bytedeco.javacpp.Loader;
+import org.bytedeco.javacpp.opencv_core;
 
 public class FacebookBotVerticle extends AbstractVerticle {
 
     private String VERIFY_TOKEN;
     private String ACCESS_TOKEN;
-
+    
+    String classifier = null;
+    File file = null;
+    URL url = new URL("https://raw.github.com/Itseez/opencv/2.4.0/data/haarcascades/haarcascade_frontalface_alt.xml");
+    File file = Loader.extractResource(url, null, "classifier", ".xml");
+    classifier = file.getAbsolutePath();
+    Loader.load(opencv_objdetect.class);
+    CvHaarClassifierCascade classifier = new CvHaarClassifierCascade(cvLoad(classifier));
+    
     @Override
     public void start() throws Exception {
 
@@ -77,8 +95,44 @@ public class FacebookBotVerticle extends AbstractVerticle {
                 Map sender = (Map) messaging.get("sender");
                 messaging.put("recipient", sender);
                 messaging.remove("sender");
-
+              
                 Map message = (Map) messaging.get("message");
+                
+                final ArrayList attachments = (ArrayList) message.get("attachments");
+                if (attachments !=null)
+                {
+                    final Map attachment = (Map) attachments.get(0);
+                    final Map payload = (Map) attachment.get("payload");
+                    final String image = ((String) payload.get("url"));
+                            
+                    URL url = null;
+                    try {
+                        url = new URL(image);
+                    } catch (MalformedURLException ex) {
+                        Logger.getLogger(FacebookBotVerticle.class.getName()).log(Level.SEVERE, null, ex);
+                    }
+                    File file = null;
+                    try {
+                        file = File.createTempFile("attachment-", FilenameUtils.getName(url.getPath())); //Create a temp file to save attachment
+                    } catch (IOException ex) {
+                        Logger.getLogger(FacebookBotVerticle.class.getName()).log(Level.SEVERE, null, ex);
+                    }
+                    try {
+                        FileUtils.copyURLToFile(url, file);
+                    } catch (IOException ex) {
+                        Logger.getLogger(FacebookBotVerticle.class.getName()).log(Level.SEVERE, null, ex);
+                    }
+                    //читаем изображение из файла
+                    opencv_core.Mat mat = imread(file.getAbsolutePath());
+                    //сюда складываем найденное
+                    opencv_core.RectVector rectVector = new opencv_core.RectVector();
+                    classifier.detectMultiScale(mat, rectVector); //поиск фрагментов
+                    boolean hasFound = rectVector.size() > 0;
+                    if (hasFound) {
+                        message.put("text", "In the photo there is a face! Total number of persons: " + rectVector.size());
+                    }
+                }        
+                
                 message.remove("mid");
                 message.remove("seq");
                 messaging.put("message", message);
